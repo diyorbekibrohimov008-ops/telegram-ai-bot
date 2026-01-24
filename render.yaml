@@ -1,11 +1,6 @@
 services:
-  - type: web
-    name: telegram-ai-bot
+  - type: worker
+    name: telegram-dual-ai-bot
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
-    envVars:
-      - key: BOT_TOKEN
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
