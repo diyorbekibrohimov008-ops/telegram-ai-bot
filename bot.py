@@ -25,12 +25,13 @@ conversation_history = {}
 # Daily message limits
 from datetime import datetime, timedelta
 
-# Track message counts: {user_id: {"claude": {"count": 0, "date": "2025-01-24"}, "chatgpt": {...}}}
+# Track message counts: {user_id: {"claude": {...}, "chatgpt": {...}}}
 user_message_counts = {}
 
 # Daily limits per AI
-DAILY_LIMIT_CLAUDE = 50
-DAILY_LIMIT_CHATGPT = 50
+DAILY_LIMIT_TOTAL = 50         # Total messages of any type
+DAILY_LIMIT_IMAGES_MAX = 5     # Maximum images allowed
+DAILY_LIMIT_VOICE_MAX = 5      # Maximum voice messages allowed
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcome message"""
@@ -83,19 +84,30 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     current_ai = user_ai_choice.get(user_id, "claude")
     
-    # Get remaining messages
-    claude_remaining = get_remaining_messages(user_id, "claude")
-    chatgpt_remaining = get_remaining_messages(user_id, "chatgpt")
+    # Get counts
+    total_used = get_total_used(user_id, current_ai)
+    images_used = get_type_used(user_id, current_ai, "image")
+    voice_used = get_type_used(user_id, current_ai, "voice")
+    
+    total_remaining = DAILY_LIMIT_TOTAL - total_used
+    images_remaining = DAILY_LIMIT_IMAGES_MAX - images_used
+    voice_remaining = DAILY_LIMIT_VOICE_MAX - voice_used
     
     if current_ai == "claude":
         status_msg = f"📊 Currently using: Claude AI 🔵\n\n"
     else:
         status_msg = f"📊 Currently using: ChatGPT 🟢\n\n"
     
-    status_msg += f"Daily Messages Remaining:\n"
-    status_msg += f"🔵 Claude: {claude_remaining}/{DAILY_LIMIT_CLAUDE}\n"
-    status_msg += f"🟢 ChatGPT: {chatgpt_remaining}/{DAILY_LIMIT_CHATGPT}\n\n"
-    status_msg += f"Limits reset at midnight UTC."
+    status_msg += f"Daily Usage ({current_ai.upper()}):\n"
+    status_msg += f"📝 Total messages: {total_used}/{DAILY_LIMIT_TOTAL}\n"
+    status_msg += f"🖼️ Images used: {images_used}/{DAILY_LIMIT_IMAGES_MAX}\n"
+    status_msg += f"🎤 Voice used: {voice_used}/{DAILY_LIMIT_VOICE_MAX}\n\n"
+    status_msg += f"💡 Remaining:\n"
+    status_msg += f"• {total_remaining} total messages\n"
+    status_msg += f"• {images_remaining} more images allowed\n"
+    status_msg += f"• {voice_remaining} more voice messages allowed\n\n"
+    status_msg += f"⚡ Switch to /{'chatgpt' if current_ai == 'claude' else 'claude'} for separate quota!\n"
+    status_msg += f"Resets at midnight UTC."
     
     await update.message.reply_text(status_msg)
 
@@ -108,11 +120,18 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def generate_image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generate image with DALL-E"""
     user_id = update.message.from_user.id
+    current_ai = user_ai_choice.get(user_id, "claude")
     
-    # Check ChatGPT limit (image gen uses ChatGPT/OpenAI)
-    remaining = get_remaining_messages(user_id, "chatgpt")
-    if remaining <= 0:
-        await update.message.reply_text("⚠️ Daily ChatGPT limit reached! Image generation uses ChatGPT quota.")
+    # Check total limit
+    total_used = get_total_used(user_id, current_ai)
+    if total_used >= DAILY_LIMIT_TOTAL:
+        await update.message.reply_text(f"⚠️ Daily limit reached for {current_ai.upper()}! (50 messages/day)\n\n💡 Try /{'chatgpt' if current_ai == 'claude' else 'claude'} for separate quota!")
+        return
+    
+    # Check image-specific limit
+    images_used = get_type_used(user_id, current_ai, "image")
+    if images_used >= DAILY_LIMIT_IMAGES_MAX:
+        await update.message.reply_text(f"⚠️ Maximum images reached for {current_ai.upper()}! (5 images/day)\n\nYou can still send {DAILY_LIMIT_TOTAL - total_used} text messages today.")
         return
     
     # Get the prompt
@@ -135,8 +154,8 @@ async def generate_image_command(update: Update, context: ContextTypes.DEFAULT_T
         
         image_url = response.data[0].url
         
-        # Increment message count
-        increment_message_count(user_id, "chatgpt")
+        # Increment both image count and total count
+        increment_message_count(user_id, current_ai, "image")
         
         # Send the image
         await update.message.reply_photo(
@@ -145,9 +164,9 @@ async def generate_image_command(update: Update, context: ContextTypes.DEFAULT_T
         )
         
         # Show remaining
-        remaining_after = get_remaining_messages(user_id, "chatgpt")
-        if remaining_after <= 5:
-            await update.message.reply_text(f"⚠️ You have {remaining_after} ChatGPT messages left today.")
+        total_after = DAILY_LIMIT_TOTAL - get_total_used(user_id, current_ai)
+        images_after = DAILY_LIMIT_IMAGES_MAX - get_type_used(user_id, current_ai, "image")
+        await update.message.reply_text(f"✅ Remaining: {total_after} total messages, {images_after} more images allowed")
             
     except Exception as e:
         print(f"Image generation error: {e}")
@@ -192,10 +211,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     current_ai = user_ai_choice[user_id]
     
-    # Check daily limit
-    remaining = get_remaining_messages(user_id, current_ai)
-    if remaining <= 0:
-        await update.message.reply_text(f"⚠️ Daily limit reached for {current_ai.upper()}!")
+    # Check total limit
+    total_used = get_total_used(user_id, current_ai)
+    if total_used >= DAILY_LIMIT_TOTAL:
+        await update.message.reply_text(f"⚠️ Daily limit reached for {current_ai.upper()}! (50 messages/day)\n\n💡 Try /{'chatgpt' if current_ai == 'claude' else 'claude'} for separate quota!")
+        return
+    
+    # Check image-specific limit
+    images_used = get_type_used(user_id, current_ai, "image")
+    if images_used >= DAILY_LIMIT_IMAGES_MAX:
+        await update.message.reply_text(f"⚠️ Maximum images reached for {current_ai.upper()}! (5 images/day)\n\nYou can still send {DAILY_LIMIT_TOTAL - total_used} text messages today.")
         return
     
     await update.message.chat.send_action("typing")
@@ -218,14 +243,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             response_text = await analyze_image_chatgpt(photo_base64, caption)
         
-        increment_message_count(user_id, current_ai)
+        increment_message_count(user_id, current_ai, "image")
         
         await update.message.reply_text(f"🖼️ Image Analysis:\n\n{response_text}")
         
-        # Show remaining if low
-        remaining_after = get_remaining_messages(user_id, current_ai)
-        if remaining_after <= 5:
-            await update.message.reply_text(f"⚠️ {remaining_after} messages left today for {current_ai.upper()}.")
+        # Show remaining
+        total_after = DAILY_LIMIT_TOTAL - get_total_used(user_id, current_ai)
+        images_after = DAILY_LIMIT_IMAGES_MAX - get_type_used(user_id, current_ai, "image")
+        await update.message.reply_text(f"✅ Remaining: {total_after} total messages, {images_after} more images allowed")
             
     except Exception as e:
         print(f"Photo analysis error: {e}")
@@ -241,10 +266,16 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     current_ai = user_ai_choice[user_id]
     
-    # Check daily limit
-    remaining = get_remaining_messages(user_id, current_ai)
-    if remaining <= 0:
-        await update.message.reply_text(f"⚠️ Daily limit reached for {current_ai.upper()}!")
+    # Check total limit
+    total_used = get_total_used(user_id, current_ai)
+    if total_used >= DAILY_LIMIT_TOTAL:
+        await update.message.reply_text(f"⚠️ Daily limit reached for {current_ai.upper()}! (50 messages/day)\n\n💡 Try /{'chatgpt' if current_ai == 'claude' else 'claude'} for separate quota!")
+        return
+    
+    # Check voice-specific limit
+    voice_used = get_type_used(user_id, current_ai, "voice")
+    if voice_used >= DAILY_LIMIT_VOICE_MAX:
+        await update.message.reply_text(f"⚠️ Maximum voice messages reached for {current_ai.upper()}! (5 voice/day)\n\nYou can still send {DAILY_LIMIT_TOTAL - total_used} text messages today.")
         return
     
     await update.message.reply_text("🎤 Transcribing your voice message...")
@@ -279,14 +310,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             ai_reply = await get_chatgpt_response(user_id, transcribed_text, update.message.from_user.first_name)
         
-        increment_message_count(user_id, current_ai)
+        increment_message_count(user_id, current_ai, "voice")
         
         await update.message.reply_text(ai_reply)
         
-        # Show remaining if low
-        remaining_after = get_remaining_messages(user_id, current_ai)
-        if remaining_after <= 5:
-            await update.message.reply_text(f"⚠️ {remaining_after} messages left today for {current_ai.upper()}.")
+        # Show remaining
+        total_after = DAILY_LIMIT_TOTAL - get_total_used(user_id, current_ai)
+        voice_after = DAILY_LIMIT_VOICE_MAX - get_type_used(user_id, current_ai, "voice")
+        await update.message.reply_text(f"✅ Remaining: {total_after} total messages, {voice_after} more voice allowed")
             
     except Exception as e:
         print(f"Voice message error: {e}")
@@ -306,18 +337,17 @@ async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     current_ai = user_ai_choice[user_id]
     
-    # Check daily limit
-    remaining = get_remaining_messages(user_id, current_ai)
-    if remaining <= 0:
-        limit_msg = f"⚠️ Daily limit reached for {current_ai.upper()}!\n\n"
-        limit_msg += f"You've used all {DAILY_LIMIT_CLAUDE if current_ai == 'claude' else DAILY_LIMIT_CHATGPT} messages today.\n\n"
+    # Check total limit
+    total_used = get_total_used(user_id, current_ai)
+    if total_used >= DAILY_LIMIT_TOTAL:
+        limit_msg = f"⚠️ Daily limit reached for {current_ai.upper()}! (50 messages/day)\n\n"
         
         # Check if other AI has messages left
         other_ai = "chatgpt" if current_ai == "claude" else "claude"
-        other_remaining = get_remaining_messages(user_id, other_ai)
+        other_total = get_total_used(user_id, other_ai)
         
-        if other_remaining > 0:
-            limit_msg += f"💡 Try switching to {other_ai.upper()}! You have {other_remaining} messages left.\n"
+        if other_total < DAILY_LIMIT_TOTAL:
+            limit_msg += f"💡 Try switching to {other_ai.upper()}! You have {DAILY_LIMIT_TOTAL - other_total} messages left.\n"
             limit_msg += f"Use /{other_ai} to switch."
         else:
             limit_msg += f"Both AIs have reached daily limits.\n"
@@ -337,17 +367,17 @@ async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Use ChatGPT
             ai_reply = await get_chatgpt_response(user_id, user_message, user_name)
         
-        # Increment message count
-        increment_message_count(user_id, current_ai)
+        # Increment text message count
+        increment_message_count(user_id, current_ai, "text")
         
         # Log interaction
         print(f"[{current_ai.upper()}] User {user_name}: {user_message}")
         print(f"[{current_ai.upper()}] Reply: {ai_reply}\n")
         
         # Add remaining messages info if low
-        remaining_after = get_remaining_messages(user_id, current_ai)
-        if remaining_after <= 5:
-            ai_reply += f"\n\n⚠️ You have {remaining_after} messages left today for {current_ai.upper()}."
+        total_after = DAILY_LIMIT_TOTAL - get_total_used(user_id, current_ai)
+        if total_after <= 5:
+            ai_reply += f"\n\n⚠️ You have {total_after} messages left today for {current_ai.upper()}."
         
         # Send response
         await update.message.reply_text(ai_reply)
@@ -485,44 +515,121 @@ async def get_chatgpt_response(user_id, user_message, user_name):
     
     return ai_reply
 
-def get_remaining_messages(user_id, ai_type):
-    """Get remaining messages for user for specific AI"""
+def get_total_used(user_id, ai_type):
+    """Get total messages used (all types combined)"""
     today = datetime.now().strftime("%Y-%m-%d")
     
     # Initialize if needed
     if user_id not in user_message_counts:
         user_message_counts[user_id] = {
-            "claude": {"count": 0, "date": today},
-            "chatgpt": {"count": 0, "date": today}
+            "claude": {
+                "text": {"count": 0, "date": today},
+                "image": {"count": 0, "date": today},
+                "voice": {"count": 0, "date": today}
+            },
+            "chatgpt": {
+                "text": {"count": 0, "date": today},
+                "image": {"count": 0, "date": today},
+                "voice": {"count": 0, "date": today}
+            }
         }
     
-    # Reset if it's a new day
-    if user_message_counts[user_id][ai_type]["date"] != today:
-        user_message_counts[user_id][ai_type] = {"count": 0, "date": today}
+    # Initialize AI if missing
+    if ai_type not in user_message_counts[user_id]:
+        user_message_counts[user_id][ai_type] = {
+            "text": {"count": 0, "date": today},
+            "image": {"count": 0, "date": today},
+            "voice": {"count": 0, "date": today}
+        }
     
-    # Calculate remaining
-    limit = DAILY_LIMIT_CLAUDE if ai_type == "claude" else DAILY_LIMIT_CHATGPT
-    used = user_message_counts[user_id][ai_type]["count"]
+    # Reset counts if new day
+    for msg_type in ["text", "image", "voice"]:
+        if msg_type not in user_message_counts[user_id][ai_type]:
+            user_message_counts[user_id][ai_type][msg_type] = {"count": 0, "date": today}
+        if user_message_counts[user_id][ai_type][msg_type]["date"] != today:
+            user_message_counts[user_id][ai_type][msg_type] = {"count": 0, "date": today}
     
-    return limit - used
+    # Sum all message types
+    total = (user_message_counts[user_id][ai_type]["text"]["count"] +
+             user_message_counts[user_id][ai_type]["image"]["count"] +
+             user_message_counts[user_id][ai_type]["voice"]["count"])
+    
+    return total
 
-def increment_message_count(user_id, ai_type):
+def get_type_used(user_id, ai_type, message_type):
+    """Get count for specific message type"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Initialize if needed
+    if user_id not in user_message_counts:
+        user_message_counts[user_id] = {
+            "claude": {
+                "text": {"count": 0, "date": today},
+                "image": {"count": 0, "date": today},
+                "voice": {"count": 0, "date": today}
+            },
+            "chatgpt": {
+                "text": {"count": 0, "date": today},
+                "image": {"count": 0, "date": today},
+                "voice": {"count": 0, "date": today}
+            }
+        }
+    
+    # Initialize AI if missing
+    if ai_type not in user_message_counts[user_id]:
+        user_message_counts[user_id][ai_type] = {
+            "text": {"count": 0, "date": today},
+            "image": {"count": 0, "date": today},
+            "voice": {"count": 0, "date": today}
+        }
+    
+    # Initialize message type if missing
+    if message_type not in user_message_counts[user_id][ai_type]:
+        user_message_counts[user_id][ai_type][message_type] = {"count": 0, "date": today}
+    
+    # Reset if new day
+    if user_message_counts[user_id][ai_type][message_type]["date"] != today:
+        user_message_counts[user_id][ai_type][message_type] = {"count": 0, "date": today}
+    
+    return user_message_counts[user_id][ai_type][message_type]["count"]
+
+def increment_message_count(user_id, ai_type, message_type):
     """Increment message count for user"""
     today = datetime.now().strftime("%Y-%m-%d")
     
     # Initialize if needed
     if user_id not in user_message_counts:
         user_message_counts[user_id] = {
-            "claude": {"count": 0, "date": today},
-            "chatgpt": {"count": 0, "date": today}
+            "claude": {
+                "text": {"count": 0, "date": today},
+                "image": {"count": 0, "date": today},
+                "voice": {"count": 0, "date": today}
+            },
+            "chatgpt": {
+                "text": {"count": 0, "date": today},
+                "image": {"count": 0, "date": today},
+                "voice": {"count": 0, "date": today}
+            }
         }
     
-    # Reset if it's a new day
-    if user_message_counts[user_id][ai_type]["date"] != today:
-        user_message_counts[user_id][ai_type] = {"count": 0, "date": today}
+    # Initialize AI if missing
+    if ai_type not in user_message_counts[user_id]:
+        user_message_counts[user_id][ai_type] = {
+            "text": {"count": 0, "date": today},
+            "image": {"count": 0, "date": today},
+            "voice": {"count": 0, "date": today}
+        }
+    
+    # Initialize message type if missing
+    if message_type not in user_message_counts[user_id][ai_type]:
+        user_message_counts[user_id][ai_type][message_type] = {"count": 0, "date": today}
+    
+    # Reset if new day
+    if user_message_counts[user_id][ai_type][message_type]["date"] != today:
+        user_message_counts[user_id][ai_type][message_type] = {"count": 0, "date": today}
     
     # Increment
-    user_message_counts[user_id][ai_type]["count"] += 1
+    user_message_counts[user_id][ai_type][message_type]["count"] += 1
 
 def main():
     """Start the bot"""
