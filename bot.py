@@ -3,6 +3,9 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import anthropic
 import openai
+import base64
+import requests
+from io import BytesIO
 
 # Get from environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -36,20 +39,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conversation_history[user_id] = []
     
     welcome_msg = """
-🤖 Welcome! I'm a Dual AI Assistant.
+🤖 Welcome! I'm a Dual AI Assistant with superpowers!
 
-Choose your AI:
+🎨 **Choose your AI:**
 /claude - Use Claude AI (default) 🔵
 /chatgpt - Use ChatGPT 🟢
 
-Other commands:
-/status - Check which AI you're using
+🌟 **Features:**
+💬 Smart conversations
+🖼️ Image analysis - Send me photos!
+🎤 Voice messages - I'll transcribe & respond
+🎨 Image generation - Ask me to create images
+💻 Code writing & debugging
+
+**Other commands:**
+/status - Check AI & remaining messages
+/generate [description] - Create an image
 /clear - Clear conversation history
 /help - Show help
 
 Current AI: Claude 🔵
 
-Just send any message and I'll respond!
+Just send any message, photo, or voice note!
     """
     await update.message.reply_text(welcome_msg)
 
@@ -94,27 +105,192 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conversation_history[user_id] = []
     await update.message.reply_text("✅ Conversation cleared!")
 
+async def generate_image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate image with DALL-E"""
+    user_id = update.message.from_user.id
+    
+    # Check ChatGPT limit (image gen uses ChatGPT/OpenAI)
+    remaining = get_remaining_messages(user_id, "chatgpt")
+    if remaining <= 0:
+        await update.message.reply_text("⚠️ Daily ChatGPT limit reached! Image generation uses ChatGPT quota.")
+        return
+    
+    # Get the prompt
+    prompt = " ".join(context.args)
+    if not prompt:
+        await update.message.reply_text("Usage: /generate [description]\n\nExample: /generate a cute cat wearing sunglasses")
+        return
+    
+    await update.message.reply_text(f"🎨 Generating image: '{prompt}'\nThis may take 10-20 seconds...")
+    
+    try:
+        # Generate image with DALL-E 3
+        response = openai.Image.create(
+            model="dall-e-3",
+            prompt=prompt,
+            size="1024x1024",
+            quality="standard",
+            n=1,
+        )
+        
+        image_url = response.data[0].url
+        
+        # Increment message count
+        increment_message_count(user_id, "chatgpt")
+        
+        # Send the image
+        await update.message.reply_photo(
+            photo=image_url,
+            caption=f"🎨 Generated: {prompt}"
+        )
+        
+        # Show remaining
+        remaining_after = get_remaining_messages(user_id, "chatgpt")
+        if remaining_after <= 5:
+            await update.message.reply_text(f"⚠️ You have {remaining_after} ChatGPT messages left today.")
+            
+    except Exception as e:
+        print(f"Image generation error: {e}")
+        await update.message.reply_text(f"❌ Failed to generate image. Error: {str(e)}")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Help message"""
     help_text = """
 🤖 Dual AI Assistant - Help
 
-Available AIs:
+**Available AIs:**
 🔵 Claude - Better for essays, writing, nuanced responses
 🟢 ChatGPT - Better for casual chat, real-time facts
 
-Commands:
+**Commands:**
 /claude - Switch to Claude AI
 /chatgpt - Switch to ChatGPT
-/status - Check current AI
+/status - Check current AI & remaining messages
+/generate [text] - Create an image
 /clear - Clear conversation history
 /start - Restart
 /help - Show this message
+
+**Features:**
+💬 Send text messages for AI chat
+🖼️ Send photos for AI to analyze
+🎤 Send voice messages for transcription + response
+🎨 Use /generate to create images
 
 Both AIs remember your conversation!
 Switch anytime to compare responses.
     """
     await update.message.reply_text(help_text)
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photo messages - AI analyzes the image"""
+    user_id = update.message.from_user.id
+    
+    # Initialize if new user
+    if user_id not in user_ai_choice:
+        user_ai_choice[user_id] = "claude"
+    
+    current_ai = user_ai_choice[user_id]
+    
+    # Check daily limit
+    remaining = get_remaining_messages(user_id, current_ai)
+    if remaining <= 0:
+        await update.message.reply_text(f"⚠️ Daily limit reached for {current_ai.upper()}!")
+        return
+    
+    await update.message.chat.send_action("typing")
+    
+    try:
+        # Get the largest photo
+        photo = update.message.photo[-1]
+        photo_file = await photo.get_file()
+        
+        # Download photo as bytes
+        photo_bytes = await photo_file.download_as_bytearray()
+        photo_base64 = base64.b64encode(photo_bytes).decode('utf-8')
+        
+        # Get caption if provided
+        caption = update.message.caption or "What's in this image?"
+        
+        # Analyze with current AI
+        if current_ai == "claude":
+            response_text = await analyze_image_claude(photo_base64, caption)
+        else:
+            response_text = await analyze_image_chatgpt(photo_base64, caption)
+        
+        increment_message_count(user_id, current_ai)
+        
+        await update.message.reply_text(f"🖼️ Image Analysis:\n\n{response_text}")
+        
+        # Show remaining if low
+        remaining_after = get_remaining_messages(user_id, current_ai)
+        if remaining_after <= 5:
+            await update.message.reply_text(f"⚠️ {remaining_after} messages left today for {current_ai.upper()}.")
+            
+    except Exception as e:
+        print(f"Photo analysis error: {e}")
+        await update.message.reply_text(f"❌ Error analyzing image: {str(e)}")
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle voice messages - transcribe and respond"""
+    user_id = update.message.from_user.id
+    
+    # Initialize if new user
+    if user_id not in user_ai_choice:
+        user_ai_choice[user_id] = "claude"
+    
+    current_ai = user_ai_choice[user_id]
+    
+    # Check daily limit
+    remaining = get_remaining_messages(user_id, current_ai)
+    if remaining <= 0:
+        await update.message.reply_text(f"⚠️ Daily limit reached for {current_ai.upper()}!")
+        return
+    
+    await update.message.reply_text("🎤 Transcribing your voice message...")
+    
+    try:
+        # Download voice file
+        voice_file = await update.message.voice.get_file()
+        voice_bytes = await voice_file.download_as_bytearray()
+        
+        # Transcribe with Whisper
+        # Save temporarily to file (Whisper API needs file)
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp_file:
+            temp_file.write(voice_bytes)
+            temp_file_path = temp_file.name
+        
+        # Transcribe
+        with open(temp_file_path, "rb") as audio_file:
+            transcript = openai.Audio.transcribe("whisper-1", audio_file)
+        
+        transcribed_text = transcript.text
+        
+        # Clean up temp file
+        os.unlink(temp_file_path)
+        
+        # Send transcription
+        await update.message.reply_text(f"📝 Transcription:\n\"{transcribed_text}\"\n\n🤖 Generating response...")
+        
+        # Get AI response to the transcribed text
+        if current_ai == "claude":
+            ai_reply = await get_claude_response(user_id, transcribed_text, update.message.from_user.first_name)
+        else:
+            ai_reply = await get_chatgpt_response(user_id, transcribed_text, update.message.from_user.first_name)
+        
+        increment_message_count(user_id, current_ai)
+        
+        await update.message.reply_text(ai_reply)
+        
+        # Show remaining if low
+        remaining_after = get_remaining_messages(user_id, current_ai)
+        if remaining_after <= 5:
+            await update.message.reply_text(f"⚠️ {remaining_after} messages left today for {current_ai.upper()}.")
+            
+    except Exception as e:
+        print(f"Voice message error: {e}")
+        await update.message.reply_text(f"❌ Error processing voice: {str(e)}")
 
 async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generate AI response based on user's choice"""
@@ -181,6 +357,58 @@ async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
         error_msg = f"⚠️ Error with {current_ai.upper()}. Please try again or switch AI with /claude or /chatgpt"
         await update.message.reply_text(error_msg)
 
+async def analyze_image_claude(image_base64, prompt):
+    """Analyze image with Claude"""
+    response = claude_client.messages.create(
+        model="claude-sonnet-4-5-20250929",
+        max_tokens=1000,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": image_base64,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt
+                    }
+                ],
+            }
+        ],
+    )
+    return response.content[0].text
+
+async def analyze_image_chatgpt(image_base64, prompt):
+    """Analyze image with ChatGPT Vision"""
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",  # Vision model
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ],
+            }
+        ],
+        max_tokens=1000,
+    )
+    return response.choices[0].message.content
+
 async def get_claude_response(user_id, user_message, user_name):
     """Get response from Claude"""
     # Add to history
@@ -195,7 +423,7 @@ async def get_claude_response(user_id, user_message, user_name):
     
     # Call Claude API
     response = claude_client.messages.create(
-        model="claude-sonnet-4-5-20250929",  # Claude Sonnet 4.5 - latest version
+        model="claude-sonnet-4-5-20250929",
         max_tokens=1000,
         system="You are a helpful, friendly AI assistant. Provide thoughtful, accurate responses. Always respond in the same language as the user's message.",
         messages=conversation_history[user_id]
@@ -233,7 +461,7 @@ async def get_chatgpt_response(user_id, user_message, user_name):
     
     # Call ChatGPT API
     response = openai.ChatCompletion.create(
-        model="gpt-5-mini",  # GPT-5 mini: compact, fast, cost-efficient
+        model="gpt-5-mini",
         messages=messages,
         max_tokens=1000,
         temperature=0.7
@@ -306,10 +534,17 @@ def main():
     app.add_handler(CommandHandler("chatgpt", use_chatgpt))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("clear", clear_command))
+    app.add_handler(CommandHandler("generate", generate_image_command))
     app.add_handler(CommandHandler("help", help_command))
+    
+    # Media handlers
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    
+    # Text handler (must be last)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_response))
     
-    print("🤖 Dual AI Bot is running (Claude + ChatGPT)...")
+    print("🤖 Dual AI Bot is running (Claude + ChatGPT + Vision + Voice + Image Gen)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
