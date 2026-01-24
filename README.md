@@ -11,3 +11,5 @@ Switch between Claude Sonnet 4.5 and GPT-5 mini in real-time. Get the best of bo
 🔒 50 messages/day per AI - Cost protection built-in
 ⚡ 24/7 Online - Never sleeps, always ready
 🧠 Remembers context - Natural flowing conversations
+Made with ❤️ and 🤖
+Choose your intelligence. Unlock unlimited possibilities.
