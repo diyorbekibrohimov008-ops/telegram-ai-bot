@@ -655,3 +655,20 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+from aiohttp import web
+
+async def handle(request):
+    return web.Response(text="Bot is running")
+
+async def start_webserver():
+    app = web.Application()
+    app.add_routes([web.get("/", handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8000)))
+    await site.start()
+
+# Add this inside main() before app.run_polling()
+import asyncio
+asyncio.get_event_loop().create_task(start_webserver())
