@@ -195,7 +195,7 @@ async def get_claude_response(user_id, user_message, user_name):
     
     # Call Claude API
     response = claude_client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-5-20250929",  # Claude Sonnet 4.5 - latest version
         max_tokens=1000,
         system="You are a helpful, friendly AI assistant. Provide thoughtful, accurate responses. Always respond in the same language as the user's message.",
         messages=conversation_history[user_id]
@@ -233,7 +233,7 @@ async def get_chatgpt_response(user_id, user_message, user_name):
     
     # Call ChatGPT API
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",  # Cheaper option, or use "gpt-4o" for better quality
+        model="gpt-5-mini",  # GPT-5 mini: compact, fast, cost-efficient
         messages=messages,
         max_tokens=1000,
         temperature=0.7
