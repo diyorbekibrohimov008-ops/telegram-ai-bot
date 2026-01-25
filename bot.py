@@ -135,21 +135,23 @@ async def generate_image_command(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(f"🎨 Generating: '{prompt}'\nPlease wait 10-20 seconds...")
     
     try:
+        # Fixed for openai==0.28.0
         response = openai.Image.create(
-            model="dall-e-3",
             prompt=prompt,
-            size="1024x1024",
-            quality="standard",
             n=1,
+            size="1024x1024"
         )
         
+        image_url = response['data'][0]['url']
+        
         increment_message_count(user_id, current_ai, "image")
-        await update.message.reply_photo(photo=response.data[0].url, caption=f"🎨 {prompt}")
+        await update.message.reply_photo(photo=image_url, caption=f"🎨 {prompt}")
         
         total_after = DAILY_LIMIT_TOTAL - get_total_used(user_id, current_ai)
         images_after = DAILY_LIMIT_IMAGES_MAX - get_type_used(user_id, current_ai, "image")
         await update.message.reply_text(f"✅ Remaining: {total_after} total, {images_after} images")
     except Exception as e:
+        print(f"Image generation error: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,18 +208,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             result = response.content[0].text
         else:
-            response = openai.ChatCompletion.create(
-                model="gpt-4o",
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": caption},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{photo_base64}"}}
-                    ]
-                }],
-                max_tokens=1000
-            )
-            result = response.choices[0].message.content
+            # For openai==0.28.0, vision is not supported, use Claude instead
+            await update.message.reply_text("⚠️ Image analysis only available with Claude. Switch with /claude")
+            return
         
         increment_message_count(user_id, current_ai, "image")
         await update.message.reply_text(f"🖼️ Image Analysis:\n\n{result}")
@@ -226,6 +219,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         images_after = DAILY_LIMIT_IMAGES_MAX - get_type_used(user_id, current_ai, "image")
         await update.message.reply_text(f"✅ Remaining: {total_after} total, {images_after} images")
     except Exception as e:
+        print(f"Photo error: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -332,8 +326,9 @@ async def get_chatgpt_response(user_id, user_message, user_name):
     
     messages.append({"role": "user", "content": user_message})
     
+    # Fixed for openai==0.28.0
     response = openai.ChatCompletion.create(
-        model="gpt-5-mini",
+        model="gpt-3.5-turbo",  # Changed from gpt-5-mini (doesn't exist in 0.28.0)
         messages=messages,
         max_tokens=1000,
         temperature=0.7
