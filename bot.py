@@ -2,7 +2,7 @@ import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import anthropic
-from openai import OpenAI  # ← MUST BE THIS
+from openai import OpenAI
 import base64
 from datetime import datetime
 from threading import Thread
@@ -26,7 +26,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Initialize AI clients
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)  # ← MUST BE THIS
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # User preferences and storage
 user_ai_choice = {}
@@ -208,7 +208,7 @@ async def generate_image_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate voice message from text"""
+    """Generate voice message from text with emotional tone"""
     user_id = update.message.from_user.id
     current_ai = user_ai_choice.get(user_id, "claude")
     
@@ -239,16 +239,20 @@ async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     voice_preference = user_voice_choice.get(user_id, "female")
     selected_voice = VOICES.get(voice_preference, "nova")
     
-    await update.message.reply_text(f"🔊 Generating voice message ({voice_preference})...")
+    await update.message.reply_text(f"🔊 Generating expressive voice message ({voice_preference})...")
     
     try:
         import tempfile
         
-        # Generate speech with OpenAI TTS
+        # Use AI to add natural expression and punctuation
+        enhanced_text = await enhance_speech_text(text)
+        
+        # Generate speech with OpenAI TTS HD model for better quality
         response = openai_client.audio.speech.create(
-            model="tts-1",
+            model="tts-1-hd",  # HD model for more natural sound
             voice=selected_voice,
-            input=text
+            input=enhanced_text,
+            speed=1.0  # Natural speed
         )
         
         # Save to temporary file
@@ -274,6 +278,61 @@ async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"TTS error: {e}")
         await update.message.reply_text(f"❌ Error generating voice: {str(e)}")
+
+async def enhance_speech_text(text):
+    """Use AI to add natural expression, emotion, and proper punctuation for speech"""
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-5-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are a speech enhancement expert. Add natural emotional tone, expression, and proper punctuation to text for text-to-speech.
+
+Rules:
+1. Add exclamation marks (!) for excitement, emphasis, or commands
+2. Add question marks (?) for questions
+3. Add ellipses (...) for pauses or thinking
+4. Add commas for natural breathing points
+5. Use CAPS for words that should be emphasized (but sparingly)
+6. Add interjections like "hmm", "oh", "wow" where natural
+7. Keep the original meaning but make it sound more human and expressive
+8. Don't add extra words, just enhance what's there
+9. Return ONLY the enhanced text, nothing else
+
+Examples:
+Input: "hello how are you"
+Output: "Hello! How are you doing?"
+
+Input: "that is amazing"
+Output: "Wow, that is AMAZING!"
+
+Input: "i dont know what to do"
+Output: "Hmm... I don't know what to do."
+
+Input: "can you help me"
+Output: "Can you help me, please?"
+
+Input: "this is the best day ever"
+Output: "This is the BEST day ever!"
+"""
+                },
+                {
+                    "role": "user",
+                    "content": text
+                }
+            ],
+            max_completion_tokens=200,
+            temperature=0.7
+        )
+        
+        enhanced = response.choices[0].message.content.strip()
+        return enhanced
+        
+    except Exception as e:
+        print(f"Enhancement error: {e}")
+        # If enhancement fails, return original text
+        return text
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
@@ -333,7 +392,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             # Updated for openai 1.x with vision
             response = openai_client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-5-mini",
                 messages=[{
                     "role": "user",
                     "content": [
@@ -472,7 +531,7 @@ async def get_chatgpt_response(user_id, user_message, user_name):
     
     # Fixed for openai==0.28.0
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",  # Changed from gpt-5-mini (doesn't exist in 0.28.0)
+        model="gpt-5-mini", 
         messages=messages,
         max_tokens=1000,
         temperature=0.7
