@@ -2,7 +2,7 @@ import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import anthropic
-import openai
+from openai import OpenAI
 import base64
 from datetime import datetime
 from threading import Thread
@@ -26,7 +26,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Initialize AI clients
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-openai.api_key = OPENAI_API_KEY
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # User preferences and storage
 user_ai_choice = {}
@@ -135,14 +135,16 @@ async def generate_image_command(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(f"🎨 Generating: '{prompt}'\nPlease wait 10-20 seconds...")
     
     try:
-        # Fixed for openai==0.28.0
-        response = openai.Image.create(
+        # Updated for openai 1.x
+        response = openai_client.images.generate(
+            model="dall-e-3",
             prompt=prompt,
+            size="1024x1024",
+            quality="standard",
             n=1,
-            size="1024x1024"
         )
         
-        image_url = response['data'][0]['url']
+        image_url = response.data[0].url
         
         increment_message_count(user_id, current_ai, "image")
         await update.message.reply_photo(photo=image_url, caption=f"🎨 {prompt}")
@@ -208,9 +210,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             result = response.content[0].text
         else:
-            # For openai==0.28.0, vision is not supported, use Claude instead
-            await update.message.reply_text("⚠️ Image analysis only available with Claude. Switch with /claude")
-            return
+            # Updated for openai 1.x with vision
+            response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": caption},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{photo_base64}"
+                            }
+                        }
+                    ]
+                }],
+                max_tokens=1000
+            )
+            result = response.choices[0].message.content
         
         increment_message_count(user_id, current_ai, "image")
         await update.message.reply_text(f"🖼️ Image Analysis:\n\n{result}")
@@ -245,8 +262,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             temp.write(voice_bytes)
             temp_path = temp.name
         
+        # Updated for openai 1.x
         with open(temp_path, "rb") as audio:
-            transcript = openai.Audio.transcribe("whisper-1", audio)
+            transcript = openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio
+            )
         
         os.unlink(temp_path)
         text = transcript.text
@@ -265,6 +286,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         voice_after = DAILY_LIMIT_VOICE_MAX - get_type_used(user_id, current_ai, "voice")
         await update.message.reply_text(f"✅ Remaining: {total_after} total, {voice_after} voice")
     except Exception as e:
+        print(f"Voice error: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
