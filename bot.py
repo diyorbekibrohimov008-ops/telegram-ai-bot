@@ -254,10 +254,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎤 Transcribing...")
     
     try:
-        import tempfile
         voice_file = await update.message.voice.get_file()
         voice_bytes = await voice_file.download_as_bytearray()
         
+        # Save to temp file
+        import tempfile
         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp:
             temp.write(voice_bytes)
             temp_path = temp.name
