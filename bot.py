@@ -2,7 +2,7 @@ import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import anthropic
-from openai import OpenAI
+from openai import OpenAI  # ← MUST BE THIS
 import base64
 from datetime import datetime
 from threading import Thread
@@ -26,22 +26,32 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Initialize AI clients
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+openai_client = OpenAI(api_key=OPENAI_API_KEY)  # ← MUST BE THIS
 
 # User preferences and storage
 user_ai_choice = {}
 conversation_history = {}
 user_message_counts = {}
+user_voice_choice = {}  # Store user's voice preference
 
 # Daily limits
 DAILY_LIMIT_TOTAL = 50
 DAILY_LIMIT_IMAGES_MAX = 5
 DAILY_LIMIT_VOICE_MAX = 5
 
+# Available voices
+VOICES = {
+    "male": "onyx",      # Deep male voice
+    "female": "nova",    # Clear female voice
+    "echo": "echo",      # Male voice
+    "shimmer": "shimmer" # Soft female voice
+}
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcome message"""
     user_id = update.message.from_user.id
     user_ai_choice[user_id] = "claude"
+    user_voice_choice[user_id] = "female"  # Default voice
     conversation_history[user_id] = []
     
     welcome_msg = """
@@ -51,20 +61,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /claude - Use Claude AI (default) 🔵
 /chatgpt - Use ChatGPT 🟢
 
+🔊 **Choose your voice:**
+/voice - Select male or female voice
+
 🌟 **Features:**
 💬 Smart conversations
 🖼️ Image analysis - Send me photos!
 🎤 Voice messages - I'll transcribe & respond
 🎨 Image generation - Ask me to create images
+🔊 Text-to-speech - Convert text to voice
 💻 Code writing & debugging
 
 **Other commands:**
 /status - Check AI & remaining messages
 /generate [description] - Create an image
+/speak [text] - Generate voice message
 /clear - Clear conversation history
 /help - Show help
 
 Current AI: Claude 🔵
+Current Voice: Female 🎙️
 
 Just send any message, photo, or voice note!
     """
@@ -81,6 +97,41 @@ async def use_chatgpt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_ai_choice[user_id] = "chatgpt"
     conversation_history[user_id] = []
     await update.message.reply_text("✅ Switched to ChatGPT 🟢\nConversation cleared. Send me a message!")
+
+async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Select voice preference"""
+    user_id = update.message.from_user.id
+    
+    # Check if user provided voice choice
+    args = context.args
+    
+    if not args:
+        # Show voice options
+        current_voice = user_voice_choice.get(user_id, "female")
+        msg = f"""
+🎙️ **Voice Settings**
+
+Current voice: {current_voice.title()}
+
+**Choose your preferred voice:**
+/voice male - Deep male voice (Onyx)
+/voice female - Clear female voice (Nova)
+/voice echo - Male voice (Echo)
+/voice shimmer - Soft female voice (Shimmer)
+
+Test it with: /speak Hello, this is my voice!
+        """
+        await update.message.reply_text(msg)
+        return
+    
+    # Set voice preference
+    choice = args[0].lower()
+    
+    if choice in ["male", "female", "echo", "shimmer"]:
+        user_voice_choice[user_id] = choice
+        await update.message.reply_text(f"✅ Voice set to: {choice.title()}\n\nTry it: /speak Hello, I sound different now!")
+    else:
+        await update.message.reply_text("❌ Invalid voice. Use: male, female, echo, or shimmer")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -156,6 +207,74 @@ async def generate_image_command(update: Update, context: ContextTypes.DEFAULT_T
         print(f"Image generation error: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
+async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate voice message from text"""
+    user_id = update.message.from_user.id
+    current_ai = user_ai_choice.get(user_id, "claude")
+    
+    # Check total limit
+    total_used = get_total_used(user_id, current_ai)
+    if total_used >= DAILY_LIMIT_TOTAL:
+        await update.message.reply_text(f"⚠️ Daily limit reached for {current_ai.upper()}! (50 messages/day)")
+        return
+    
+    # Check voice limit
+    voice_used = get_type_used(user_id, current_ai, "voice")
+    if voice_used >= DAILY_LIMIT_VOICE_MAX:
+        await update.message.reply_text(f"⚠️ Maximum voice messages reached! (5 voice/day)\n\nYou can still send {DAILY_LIMIT_TOTAL - total_used} text messages.")
+        return
+    
+    # Get the text to speak
+    text = " ".join(context.args)
+    if not text:
+        await update.message.reply_text("Usage: /speak [text]\n\nExample: /speak Hello, how are you today?")
+        return
+    
+    # Limit text length
+    if len(text) > 500:
+        await update.message.reply_text("⚠️ Text too long! Maximum 500 characters.")
+        return
+    
+    # Get user's voice preference
+    voice_preference = user_voice_choice.get(user_id, "female")
+    selected_voice = VOICES.get(voice_preference, "nova")
+    
+    await update.message.reply_text(f"🔊 Generating voice message ({voice_preference})...")
+    
+    try:
+        import tempfile
+        
+        # Generate speech with OpenAI TTS
+        response = openai_client.audio.speech.create(
+            model="tts-1",
+            voice=selected_voice,
+            input=text
+        )
+        
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp:
+            temp.write(response.content)
+            temp_path = temp.name
+        
+        # Send voice message
+        with open(temp_path, "rb") as audio_file:
+            await update.message.reply_voice(voice=audio_file)
+        
+        # Clean up temp file
+        os.unlink(temp_path)
+        
+        # Increment voice count
+        increment_message_count(user_id, current_ai, "voice")
+        
+        # Show remaining
+        total_after = DAILY_LIMIT_TOTAL - get_total_used(user_id, current_ai)
+        voice_after = DAILY_LIMIT_VOICE_MAX - get_type_used(user_id, current_ai, "voice")
+        await update.message.reply_text(f"✅ Remaining: {total_after} total, {voice_after} voice")
+        
+    except Exception as e:
+        print(f"TTS error: {e}")
+        await update.message.reply_text(f"❌ Error generating voice: {str(e)}")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
 🤖 Dual AI Assistant - Help
@@ -163,13 +282,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 **Commands:**
 /claude - Switch to Claude AI
 /chatgpt - Switch to ChatGPT
+/voice [male/female/echo/shimmer] - Choose voice
 /status - Check usage & limits
 /generate [text] - Create an image
+/speak [text] - Generate voice message
 /clear - Clear conversation
 /help - Show this message
 
 **Features:**
-💬 Text chat, 🖼️ Image analysis, 🎤 Voice transcription, 🎨 Image generation
+💬 Text chat, 🖼️ Image analysis, 🎤 Voice transcription, 🎨 Image generation, 🔊 Text-to-speech
 
 **Limits:** 50 total messages/day per AI (max 5 images, 5 voice)
     """
@@ -434,9 +555,11 @@ def run_bot():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("claude", use_claude))
     app.add_handler(CommandHandler("chatgpt", use_chatgpt))
+    app.add_handler(CommandHandler("voice", voice_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("generate", generate_image_command))
+    app.add_handler(CommandHandler("speak", speak_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
