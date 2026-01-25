@@ -2,18 +2,37 @@ import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import anthropic
-from openai import OpenAI
+import openai
 import base64
 from io import BytesIO
+from threading import Thread
+from flask import Flask
+
+# Flask app for health check (required for web service)
+app_flask = Flask(__name__)
+
+@app_flask.route('/')
+def home():
+    return "Bot is running!", 200
+
+@app_flask.route('/health')
+def health():
+    return "OK", 200
+
+def run_flask():
+    port = int(os.environ.get('PORT', 10000))
+    app_flask.run(host='0.0.0.0', port=port)
 
 # Get from environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# ... rest of your bot code stays the same ...
+
 # Initialize AI clients
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
 
 # User preferences: which AI they're using
 user_ai_choice = {}  # {user_id: "claude" or "chatgpt"}
@@ -632,6 +651,11 @@ def increment_message_count(user_id, ai_type, message_type):
 
 def main():
     """Start the bot"""
+    # Start Flask in background thread
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
     app = Application.builder().token(BOT_TOKEN).build()
     
     # Add handlers
@@ -655,20 +679,13 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
 
-from aiohttp import web
+---
 
-async def handle(request):
-    return web.Response(text="Bot is running")
-
-async def start_webserver():
-    app = web.Application()
-    app.add_routes([web.get("/", handle)])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8000)))
-    await site.start()
-
-# Add this inside main() before app.run_polling()
-import asyncio
-asyncio.get_event_loop().create_task(start_webserver())
+## 📁 Updated `requirements.txt`
+```
+python-telegram-bot==21.10
+anthropic==0.40.0
+openai==1.59.5
+flask==3.0.0
