@@ -8,6 +8,13 @@ from datetime import datetime
 from threading import Thread
 from flask import Flask
 
+# TEST: Print to logs what we imported
+print("=" * 50)
+print("IMPORT TEST:")
+print(f"OpenAI module: {OpenAI}")
+print(f"Anthropic module: {anthropic}")
+print("=" * 50)
+
 # Flask app for Render web service (keeps port open)
 flask_app = Flask(__name__)
 
@@ -638,3 +645,4 @@ if __name__ == "__main__":
     
     # Run telegram bot in main thread
     run_bot()
+
