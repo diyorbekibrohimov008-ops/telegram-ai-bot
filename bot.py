@@ -524,7 +524,7 @@ async def get_chatgpt_response(user_id, user_message, user_name):
     messages.append({"role": "user", "content": user_message})
     
     # Fixed for openai==0.28.0
-    response = openai.ChatCompletion.create(
+    response = openai_client.ChatCompletion.create(
         model="gpt-5-mini", 
         messages=messages,
         max_tokens=1000,
@@ -623,5 +623,6 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+
 
 
