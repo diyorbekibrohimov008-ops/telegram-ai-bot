@@ -524,14 +524,14 @@ async def get_chatgpt_response(user_id, user_message, user_name):
     messages.append({"role": "user", "content": user_message})
     
     # Fixed for openai==0.28.0
-    response = openai_client.ChatCompletion.create(
+    response = openai_client.responses.create(
         model="gpt-5-mini", 
-        messages=messages,
+        input=user_messages,
         max_tokens=1000,
         temperature=0.7
     )
     
-    ai_reply = response.choices[0].message.content
+    ai_reply = response.output_text
     
     conversation_history[user_id].append({"role": "user", "content": user_message})
     conversation_history[user_id].append({"role": "assistant", "content": ai_reply})
@@ -623,6 +623,7 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+
 
 
 
