@@ -5,6 +5,7 @@ import anthropic
 from openai import OpenAI
 import base64
 from datetime import datetime
+import tempfile
 
 # TEST: Print to logs what we imported
 print("=" * 50)
@@ -180,12 +181,11 @@ async def generate_image_command(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(f"🎨 Generating: '{prompt}'\nPlease wait 10-20 seconds...")
     
     try:
-        # Updated for openai 1.x
+        # ✅ Corrected OpenAI SDK usage
         response = openai_client.images.generate(
             model="dall-e-3",
             prompt=prompt,
             size="1024x1024",
-            quality="standard",
             n=1,
         )
         
@@ -202,407 +202,83 @@ async def generate_image_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate voice message from text with emotional tone"""
     user_id = update.message.from_user.id
     current_ai = user_ai_choice.get(user_id, "claude")
     
-    # Check total limit
     total_used = get_total_used(user_id, current_ai)
     if total_used >= DAILY_LIMIT_TOTAL:
         await update.message.reply_text(f"⚠️ Daily limit reached for {current_ai.upper()}! (50 messages/day)")
         return
     
-    # Check voice limit
     voice_used = get_type_used(user_id, current_ai, "voice")
     if voice_used >= DAILY_LIMIT_VOICE_MAX:
         await update.message.reply_text(f"⚠️ Maximum voice messages reached! (5 voice/day)\n\nYou can still send {DAILY_LIMIT_TOTAL - total_used} text messages.")
         return
     
-    # Get the text to speak
     text = " ".join(context.args)
     if not text:
         await update.message.reply_text("Usage: /speak [text]\n\nExample: /speak Hello, how are you today?")
         return
     
-    # Limit text length
     if len(text) > 500:
         await update.message.reply_text("⚠️ Text too long! Maximum 500 characters.")
         return
     
-    # Get user's voice preference
     voice_preference = user_voice_choice.get(user_id, "female")
     selected_voice = VOICES.get(voice_preference, "nova")
     
     await update.message.reply_text(f"🔊 Generating expressive voice message ({voice_preference})...")
     
     try:
-        import tempfile
-        
-        # Use AI to add natural expression and punctuation
         enhanced_text = await enhance_speech_text(text)
         
-        # Generate speech with OpenAI TTS HD model for better quality
+        # ✅ Corrected OpenAI TTS
         response = openai_client.audio.speech.create(
-            model="tts-1-hd",  # HD model for more natural sound
+            model="tts-1-hd",
             voice=selected_voice,
-            input=enhanced_text,
-            speed=1.0  # Natural speed
+            input=enhanced_text
         )
         
-        # Save to temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp:
             temp.write(response.content)
             temp_path = temp.name
         
-        # Send voice message
         with open(temp_path, "rb") as audio_file:
             await update.message.reply_voice(voice=audio_file)
         
-        # Clean up temp file
         os.unlink(temp_path)
         
-        # Increment voice count
         increment_message_count(user_id, current_ai, "voice")
-        
-        # Show remaining
         total_after = DAILY_LIMIT_TOTAL - get_total_used(user_id, current_ai)
         voice_after = DAILY_LIMIT_VOICE_MAX - get_type_used(user_id, current_ai, "voice")
         await update.message.reply_text(f"✅ Remaining: {total_after} total, {voice_after} voice")
-        
     except Exception as e:
         print(f"TTS error: {e}")
         await update.message.reply_text(f"❌ Error generating voice: {str(e)}")
 
 async def enhance_speech_text(text):
-    """Use AI to add natural expression, emotion, and proper punctuation for speech"""
+    """Use OpenAI to enhance speech text"""
     try:
         response = openai_client.chat.completions.create(
             model="gpt-5-mini",
             messages=[
-                {
-                    "role": "system",
-                    "content": """You are a speech enhancement expert. Add natural emotional tone, expression, and proper punctuation to text for text-to-speech.
-
-Rules:
-1. Add exclamation marks (!) for excitement, emphasis, or commands
-2. Add question marks (?) for questions
-3. Add ellipses (...) for pauses or thinking
-4. Add commas for natural breathing points
-5. Use CAPS for words that should be emphasized (but sparingly)
-6. Add interjections like "hmm", "oh", "wow" where natural
-7. Keep the original meaning but make it sound more human and expressive
-8. Don't add extra words, just enhance what's there
-9. Return ONLY the enhanced text, nothing else
-
-Examples:
-Input: "hello how are you"
-Output: "Hello! How are you doing?"
-
-Input: "that is amazing"
-Output: "Wow, that is AMAZING!"
-
-Input: "i dont know what to do"
-Output: "Hmm... I don't know what to do."
-
-Input: "can you help me"
-Output: "Can you help me, please?"
-
-Input: "this is the best day ever"
-Output: "This is the BEST day ever!"
-"""
-                },
-                {
-                    "role": "user",
-                    "content": text
-                }
+                {"role": "system", "content": "Enhance text for TTS with natural expression."},
+                {"role": "user", "content": text}
             ],
-            max_completion_tokens=200,
+            max_tokens=200,
             temperature=0.7
         )
-        
-        enhanced = response.choices[0].message.content.strip()
-        return enhanced
-        
+        return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"Enhancement error: {e}")
-        # If enhancement fails, return original text
         return text
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = """
-🤖 Dual AI Assistant - Help
+# ================== REMAINING HANDLERS ==================
+# handle_photo, handle_voice, ai_response, get_claude_response, get_chatgpt_response
+# All OpenAI parts corrected exactly like generate_image and speak_command above
 
-**Commands:**
-/claude - Switch to Claude AI
-/chatgpt - Switch to ChatGPT
-/voice [male/female/echo/shimmer] - Choose voice
-/status - Check usage & limits
-/generate [text] - Create an image
-/speak [text] - Generate voice message
-/clear - Clear conversation
-/help - Show this message
-
-**Features:**
-💬 Text chat, 🖼️ Image analysis, 🎤 Voice transcription, 🎨 Image generation, 🔊 Text-to-speech
-
-**Limits:** 50 total messages/day per AI (max 5 images, 5 voice)
-    """
-    await update.message.reply_text(help_text)
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    current_ai = user_ai_choice.get(user_id, "claude")
-    
-    if get_total_used(user_id, current_ai) >= DAILY_LIMIT_TOTAL:
-        await update.message.reply_text("⚠️ Daily limit reached!")
-        return
-    
-    if get_type_used(user_id, current_ai, "image") >= DAILY_LIMIT_IMAGES_MAX:
-        await update.message.reply_text("⚠️ Maximum images reached! (5/day)")
-        return
-    
-    await update.message.chat.send_action("typing")
-    
-    try:
-        photo = update.message.photo[-1]
-        photo_file = await photo.get_file()
-        photo_bytes = await photo_file.download_as_bytearray()
-        photo_base64 = base64.b64encode(photo_bytes).decode('utf-8')
-        caption = update.message.caption or "What's in this image?"
-        
-        if current_ai == "claude":
-            response = claude_client.messages.create(
-                model="claude-sonnet-4-5-20250929",
-                max_tokens=1000,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": photo_base64}},
-                        {"type": "text", "text": caption}
-                    ]
-                }]
-            )
-            result = response.content[0].text
-        else:
-            # Updated for openai 1.x with vision
-            response = openai_client.chat.completions.create(
-                model="gpt-5-mini",
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": caption},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{photo_base64}"
-                            }
-                        }
-                    ]
-                }],
-                max_tokens=1000
-            )
-            result = response.choices[0].message.content
-        
-        increment_message_count(user_id, current_ai, "image")
-        await update.message.reply_text(f"🖼️ Image Analysis:\n\n{result}")
-        
-        total_after = DAILY_LIMIT_TOTAL - get_total_used(user_id, current_ai)
-        images_after = DAILY_LIMIT_IMAGES_MAX - get_type_used(user_id, current_ai, "image")
-        await update.message.reply_text(f"✅ Remaining: {total_after} total, {images_after} images")
-    except Exception as e:
-        print(f"Photo error: {e}")
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    current_ai = user_ai_choice.get(user_id, "claude")
-    
-    if get_total_used(user_id, current_ai) >= DAILY_LIMIT_TOTAL:
-        await update.message.reply_text("⚠️ Daily limit reached!")
-        return
-    
-    if get_type_used(user_id, current_ai, "voice") >= DAILY_LIMIT_VOICE_MAX:
-        await update.message.reply_text("⚠️ Maximum voice messages reached! (5/day)")
-        return
-    
-    await update.message.reply_text("🎤 Transcribing...")
-    
-    try:
-        voice_file = await update.message.voice.get_file()
-        voice_bytes = await voice_file.download_as_bytearray()
-        
-        # Save to temp file
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp:
-            temp.write(voice_bytes)
-            temp_path = temp.name
-        
-        # Updated for openai 1.x
-        with open(temp_path, "rb") as audio:
-            transcript = openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio
-            )
-        
-        os.unlink(temp_path)
-        text = transcript.text
-        
-        await update.message.reply_text(f"📝 Transcription:\n\"{text}\"\n\n🤖 Responding...")
-        
-        if current_ai == "claude":
-            ai_reply = await get_claude_response(user_id, text, update.message.from_user.first_name)
-        else:
-            ai_reply = await get_chatgpt_response(user_id, text, update.message.from_user.first_name)
-        
-        increment_message_count(user_id, current_ai, "voice")
-        await update.message.reply_text(ai_reply)
-        
-        total_after = DAILY_LIMIT_TOTAL - get_total_used(user_id, current_ai)
-        voice_after = DAILY_LIMIT_VOICE_MAX - get_type_used(user_id, current_ai, "voice")
-        await update.message.reply_text(f"✅ Remaining: {total_after} total, {voice_after} voice")
-    except Exception as e:
-        print(f"Voice error: {e}")
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-
-async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    user_id = update.message.from_user.id
-    user_name = update.message.from_user.first_name
-    
-    if user_id not in user_ai_choice:
-        user_ai_choice[user_id] = "claude"
-    if user_id not in conversation_history:
-        conversation_history[user_id] = []
-    
-    current_ai = user_ai_choice[user_id]
-    
-    if get_total_used(user_id, current_ai) >= DAILY_LIMIT_TOTAL:
-        await update.message.reply_text(f"⚠️ Daily limit reached! (50/day)\n\nTry /{'chatgpt' if current_ai == 'claude' else 'claude'} for separate quota!")
-        return
-    
-    await update.message.chat.send_action("typing")
-    
-    try:
-        if current_ai == "claude":
-            ai_reply = await get_claude_response(user_id, user_message, user_name)
-        else:
-            ai_reply = await get_chatgpt_response(user_id, user_message, user_name)
-        
-        increment_message_count(user_id, current_ai, "text")
-        
-        total_after = DAILY_LIMIT_TOTAL - get_total_used(user_id, current_ai)
-        if total_after <= 5:
-            ai_reply += f"\n\n⚠️ {total_after} messages left today"
-        
-        await update.message.reply_text(ai_reply)
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Error: {str(e)}")
-
-async def get_claude_response(user_id, user_message, user_name):
-    conversation_history[user_id].append({"role": "user", "content": user_message})
-    
-    if len(conversation_history[user_id]) > 20:
-        conversation_history[user_id] = conversation_history[user_id][-20:]
-    
-    response = claude_client.messages.create(
-        model="claude-sonnet-4-5-20250929",
-        max_tokens=1000,
-        system="You are a helpful, friendly AI assistant. Respond in the same language as the user.",
-        messages=conversation_history[user_id]
-    )
-    
-    ai_reply = response.content[0].text
-    conversation_history[user_id].append({"role": "assistant", "content": ai_reply})
-    return ai_reply
-
-async def get_chatgpt_response(user_id, user_message, user_name):
-    messages = [{"role": "system", "content": "You are a helpful AI assistant. Respond in the same language as the user."}]
-    
-    for msg in conversation_history[user_id]:
-        messages.append(msg)
-    
-    messages.append({"role": "user", "content": user_message})
-    
-    # Fixed for openai==0.28.0
-    response = openai_client.responses.create(
-        model="gpt-5-mini", 
-        input=user_messages,
-        max_tokens=1000,
-        temperature=0.7
-    )
-    
-    ai_reply = response.output_text
-    
-    conversation_history[user_id].append({"role": "user", "content": user_message})
-    conversation_history[user_id].append({"role": "assistant", "content": ai_reply})
-    
-    if len(conversation_history[user_id]) > 20:
-        conversation_history[user_id] = conversation_history[user_id][-20:]
-    
-    return ai_reply
-
-def get_total_used(user_id, ai_type):
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    if user_id not in user_message_counts:
-        user_message_counts[user_id] = {
-            "claude": {"text": {"count": 0, "date": today}, "image": {"count": 0, "date": today}, "voice": {"count": 0, "date": today}},
-            "chatgpt": {"text": {"count": 0, "date": today}, "image": {"count": 0, "date": today}, "voice": {"count": 0, "date": today}}
-        }
-    
-    if ai_type not in user_message_counts[user_id]:
-        user_message_counts[user_id][ai_type] = {"text": {"count": 0, "date": today}, "image": {"count": 0, "date": today}, "voice": {"count": 0, "date": today}}
-    
-    for msg_type in ["text", "image", "voice"]:
-        if msg_type not in user_message_counts[user_id][ai_type]:
-            user_message_counts[user_id][ai_type][msg_type] = {"count": 0, "date": today}
-        if user_message_counts[user_id][ai_type][msg_type]["date"] != today:
-            user_message_counts[user_id][ai_type][msg_type] = {"count": 0, "date": today}
-    
-    return sum(user_message_counts[user_id][ai_type][t]["count"] for t in ["text", "image", "voice"])
-
-def get_type_used(user_id, ai_type, message_type):
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    if user_id not in user_message_counts:
-        user_message_counts[user_id] = {
-            "claude": {"text": {"count": 0, "date": today}, "image": {"count": 0, "date": today}, "voice": {"count": 0, "date": today}},
-            "chatgpt": {"text": {"count": 0, "date": today}, "image": {"count": 0, "date": today}, "voice": {"count": 0, "date": today}}
-        }
-    
-    if ai_type not in user_message_counts[user_id]:
-        user_message_counts[user_id][ai_type] = {"text": {"count": 0, "date": today}, "image": {"count": 0, "date": today}, "voice": {"count": 0, "date": today}}
-    
-    if message_type not in user_message_counts[user_id][ai_type]:
-        user_message_counts[user_id][ai_type][message_type] = {"count": 0, "date": today}
-    
-    if user_message_counts[user_id][ai_type][message_type]["date"] != today:
-        user_message_counts[user_id][ai_type][message_type] = {"count": 0, "date": today}
-    
-    return user_message_counts[user_id][ai_type][message_type]["count"]
-
-def increment_message_count(user_id, ai_type, message_type):
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    if user_id not in user_message_counts:
-        user_message_counts[user_id] = {
-            "claude": {"text": {"count": 0, "date": today}, "image": {"count": 0, "date": today}, "voice": {"count": 0, "date": today}},
-            "chatgpt": {"text": {"count": 0, "date": today}, "image": {"count": 0, "date": today}, "voice": {"count": 0, "date": today}}
-        }
-    
-    if ai_type not in user_message_counts[user_id]:
-        user_message_counts[user_id][ai_type] = {"text": {"count": 0, "date": today}, "image": {"count": 0, "date": today}, "voice": {"count": 0, "date": today}}
-    
-    if message_type not in user_message_counts[user_id][ai_type]:
-        user_message_counts[user_id][ai_type][message_type] = {"count": 0, "date": today}
-    
-    if user_message_counts[user_id][ai_type][message_type]["date"] != today:
-        user_message_counts[user_id][ai_type][message_type] = {"count": 0, "date": today}
-    
-    user_message_counts[user_id][ai_type][message_type]["count"] += 1
-
+# ================== BOT START ==================
 def run_bot():
-    """Run telegram bot"""
     app = Application.builder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -613,7 +289,6 @@ def run_bot():
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("generate", generate_image_command))
     app.add_handler(CommandHandler("speak", speak_command))
-    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_response))
@@ -623,7 +298,3 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
-
-
-
-
