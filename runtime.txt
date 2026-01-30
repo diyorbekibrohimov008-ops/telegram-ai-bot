@@ -1,1 +1,6 @@
-python-3.11
+python-3.11.0
+```
+
+### **3. Procfile** (NEW - Railway needs this!)
+```
+worker: python bot.py
