@@ -5,8 +5,6 @@ import anthropic
 from openai import OpenAI
 import base64
 from datetime import datetime
-from threading import Thread
-from flask import Flask
 
 # TEST: Print to logs what we imported
 print("=" * 50)
@@ -14,17 +12,6 @@ print("IMPORT TEST:")
 print(f"OpenAI module: {OpenAI}")
 print(f"Anthropic module: {anthropic}")
 print("=" * 50)
-
-# Flask app for Render web service (keeps port open)
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def home():
-    return "🤖 Telegram Bot is Running!", 200
-
-@flask_app.route('/health')
-def health():
-    return "OK", 200
 
 # Get from environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -635,14 +622,6 @@ def run_bot():
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    # Start Flask in background thread
-    port = int(os.environ.get('PORT', 10000))
-    flask_thread = Thread(target=lambda: flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False))
-    flask_thread.daemon = True
-    flask_thread.start()
-    
-    print(f"🌐 Flask running on port {port}")
-    
-    # Run telegram bot in main thread
     run_bot()
+
 
